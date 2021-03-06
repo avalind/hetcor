@@ -1,0 +1,12 @@
+[package]
+name = "hetcor"
+version = "0.1.0"
+authors = ["Anders Valind <anders.valind@med.lu.se>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rust-htslib = "*"
+bio = "*"
+clap = "3.0.0-beta.2"
