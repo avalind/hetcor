@@ -57,7 +57,7 @@ fn is_het(genotype: &str) -> bool {
 
 fn main() {
     let matches = App::new("hetcor")
-        .version("1.0")
+        .version("0.1.0")
         .author("Anders Valind <anders.valind@med.lu.se>")
         .about("Calculates heterozygote concordance between two samples")
         .arg(Arg::new("regions")
