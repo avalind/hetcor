@@ -1,8 +1,10 @@
 
 use clap::{Arg, App};
 use rust_htslib::bcf::{IndexedReader, Read};
+use anyhow::Result;
 use std::fs::File;
 use std::io::{self, BufRead};
+
 
 #[derive(Debug)]
 struct Region {
@@ -12,34 +14,11 @@ struct Region {
 }
 
 impl Region {
-    fn from_string(line: &str) -> Result<Region, &str> {
+    fn from_string(line: &str) -> Result<Region> {
         let mut parts = line.split("\t");
-        
-        let ctg = match parts.next() {
-            Some(c) => c,
-            None => return Err("Malformed record, while parsing contig"),
-        };
-
-        let start = match parts.next() {
-            Some(s) => { 
-                match s.parse::<u64>() {
-                    Ok(i) => i,
-                    Err(_e) => return Err("unable to parse to string"),   
-                }
-            },
-            None => return Err("Malformed record while parsing start position"),
-        };
-
-        let end = match parts.next() {
-            Some(s) => {
-                match s.parse::<u64>() {
-                    Ok(i) => i,
-                    Err(_e) => return Err("unable to parse to string"),
-                }
-            },
-            None => return Err("Malformed record while parsing end position"),
-        };
-
+        let ctg = parts.next().unwrap();
+        let start = parts.next().unwrap().parse::<u64>()?;
+        let end = parts.next().unwrap().parse::<u64>()?;
         return Ok(Region{
                 ctg: ctg.to_string(),
                 start: start,
@@ -55,7 +34,7 @@ fn is_het(genotype: &str) -> bool {
     return false;
 }
 
-fn main() {
+fn run() -> Result<()> {
     let matches = App::new("hetcor")
         .version("0.1.0")
         .author("Anders Valind <anders.valind@med.lu.se>")
@@ -96,8 +75,6 @@ fn main() {
         };
         
         let mut bcf = IndexedReader::from_path(vcf_file).expect("Unable to open vcf file");  
-        
-        // first, find indices of the samples in question
         let hdr = bcf.header();
         
         let fidx = match hdr.sample_id(first.as_bytes()) {
@@ -115,67 +92,54 @@ fn main() {
         };
         
         let mut concordant_hets = 0;
-        
+        let mut total_variants = 0;
         if regions == "" {
             for(_i, record_res) in bcf.records().enumerate() {
-                let record = record_res.expect("malformed record!");
-                let gts = record.genotypes().expect("Failed reading genotypes");
+                let record = record_res?;
+                let gts = record.genotypes()?;
                 let fgt = gts.get(fidx);
                 let sgt = gts.get(sidx);
             
                 if fgt == sgt && is_het(&format!("{}", fgt)) {
                     concordant_hets += 1;
-                } 
+                }; 
+                total_variants += 1;
             }
         } else {
-            let bedfile = match File::open(regions) {
-                Ok(file) => file,
-                Err(_e) => {
-                    panic!("Failed to open bed file!");
-                },
-            };
-            
+            let bedfile = File::open(regions)?;
             let bedfile = io::BufReader::new(bedfile);
-            let tally: i64 = bedfile.lines().map(|line| {                
+            let tally: Result<i64> = bedfile.lines().map(|line| {                
                 let unwrapped = line.unwrap();
-                let reg = match Region::from_string(&unwrapped) {
-                    Ok(r) => r,
-                    Err(_e) => panic!("Malformed record passed to Region::from_string!"),
-                };
-
+                let reg = Region::from_string(&unwrapped)?;
                 let hdr = bcf.header();
-                let contig = match hdr.name2rid(reg.ctg.as_bytes()) {
-                    Ok(cont) => cont,
-                    Err(_e) => panic!("Unable to retrieve contig from bcf header!"),
-                };
+                let contig = hdr.name2rid(reg.ctg.as_bytes())?;
     
                 // fetch the current region from the bcf file
-                match bcf.fetch(contig, reg.start, reg.end) {
-                    Ok(()) => (),
-                    Err(_e) => panic!("Unable to fetch!"),
-                }
-
-                let subcount: i64 = bcf.records().map(|record| {
-                    let site = match record {
-                        Ok(s)  => s,
-                        Err(_e) => panic!("Malformed vcf record"),
-                    };
-
-                    let gts = match site.genotypes() {
-                        Ok(g) => g,
-                        Err(_e) => panic!("genotype error!"),
-                    };
-
+                bcf.fetch(contig, reg.start, reg.end)?;
+                let subcount: Result<i64> = bcf.records().map(|record| {
+                    let site = record?;
+                    let gts = site.genotypes()?;
+                    total_variants += 1;
                     if gts.get(fidx) == gts.get(sidx) && is_het(&format!("{}", gts.get(fidx))) {
-                        return 1;
+                        return Ok(1)
                     }
-                    return 0;
+                    return Ok(0);
                 }).sum();
+                
                 return subcount;
             }).sum();
-            concordant_hets = tally;
+            concordant_hets = tally?;
         }
-        println!("{}", concordant_hets);
-
+        println!("total_variants\tconcordant_hets");
+        println!("{}\t{}", total_variants, concordant_hets);
     }   
+    return Ok(());
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error while executing: {}", e);
+        e.chain().skip(1).for_each(|cause| eprintln!("because: {}", cause));
+        std::process::exit(1);
+    }
 }   
